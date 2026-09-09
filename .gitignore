@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+.system_generated/
+*.log
+test_*.py
+debug_*.py
+inspect_*.py
+tune_*.py
+ablation_*.py
+consult_*.py
+advice_*.md
