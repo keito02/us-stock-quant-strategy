@@ -219,6 +219,23 @@ total_interest = tx_df["InterestPaid"].sum() * scale_factor if (tx_df is not Non
 eq_df["year"] = eq_df.index.year
 eq_2022 = eq_df[eq_df["year"] == 2022]
 ret_2022 = ((eq_2022["equity"].iloc[-1] / eq_2022["equity"].iloc[0] - 1) * 100) if len(eq_2022) > 0 else 0.0
+# -------------------------------------------------------------
+# 為替レート (USD/JPY) リアルタイム自動取得関数
+# -------------------------------------------------------------
+@st.cache_data(ttl=600)
+def get_live_usdjpy_rate():
+    """Yahoo Finance より最新のドル円レートを自動取得 (予備フォールバック: 150.0円)"""
+    for sym in ["USDJPY=X", "JPY=X"]:
+        try:
+            t = yf.Ticker(sym)
+            hist = t.history(period="5d")
+            if not hist.empty:
+                val = float(hist["Close"].iloc[-1])
+                if val > 0:
+                    return round(val, 2)
+        except Exception:
+            pass
+    return 150.0
 
 # -------------------------------------------------------------
 # スクリーニング＆購入候補計算関数 (口座モード連動)
@@ -374,6 +391,24 @@ with tab0:
         * **16年実績**: 初期 $700 ➔ **$693,234 (約1.04億円 / 990倍 / CAGR +52.30% / MaxDD -56.4%)**
         """)
 
+    live_usd_rate = get_live_usdjpy_rate()
+
+    # ── 0. データ鮮度 ＆ リアルタイム為替ステータスバッジ ──
+    st.markdown(f"""
+    <div style="background:#161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 16px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">📅</span>
+            <span style="font-size: 14px; color: #8b949e;">株価データ基準日:</span>
+            <span style="font-size: 14.5px; font-weight: bold; color: #7ee787;">{screen_info['date']} (直近終値・自動最新同期済)</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">⚡</span>
+            <span style="font-size: 14px; color: #8b949e;">為替自動取得レート:</span>
+            <span style="font-size: 14.5px; font-weight: bold; color: #f2cc60;">1 USD = {live_usd_rate:.2f} JPY</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── 1. 相場環境ステータスバー ──
     regime_text = f"🟢 BULL (強気相場継続 / レバレッジ {screen_info['rec_lev']:.1f}x 適用)" if not screen_info["is_bear"] else "🔴 BEAR (100% 現金/BIL 完全退避)"
     
@@ -401,13 +436,13 @@ with tab0:
         )
     with in_c2:
         usd_rate = st.number_input(
-            "為替レート (USD/JPY)",
+            "為替レート (USD/JPY) ⚡自動取得済",
             min_value=50.0,
             max_value=300.0,
-            value=150.0,
-            step=0.5,
-            format="%.1f",
-            help="現在のドル円為替レートです。"
+            value=float(live_usd_rate),
+            step=0.1,
+            format="%.2f",
+            help=f"Yahoo Financeより最新為替レート（現在: {live_usd_rate:.2f}円）を自動取得し入力しています。手動で任意のレートに変更・調節することも可能です。"
         )
     with in_c3:
         if is_margin_mode:

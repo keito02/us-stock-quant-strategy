@@ -112,14 +112,123 @@ def build_cache(universe=None, start="2008-01-01", force=False):
     
     return load_cache(universe)
 
-def load_cache(universe=None):
-    """超高速 Feather 読込 (所要時間: 約0.04秒)"""
+def sync_daily_cache(universe=None, force=False):
+    """
+    スマート日次差分同期 (Smart Daily Cache Sync):
+    - キャッシュ内の最大日付（max_date）をチェック。
+    - 直近営業日より古い場合、yfinance から直近数日分のローソク足のみを数秒で高速バッチ取得。
+    - 既存16年データとシームレスに結合し、全テクニカル指標を再計算して Feather に保存。
+    """
+    if universe is None:
+        universe = DEFAULT_UNIVERSE
+    universe = sorted(list(set(universe)))
+
     if not os.path.exists(CACHE_FILE):
         return build_cache(universe)
 
+    try:
+        existing_df = pd.read_feather(CACHE_FILE)
+        max_date = pd.to_datetime(existing_df["Date"]).max()
+    except Exception as e:
+        print(f"[Cache Sync Warning] Feather読込失敗、再構築します: {e}")
+        return build_cache(universe, force=True)
+
+    today = pd.Timestamp.now().floor("D")
+    # 米国市場の直近営業日（土日は金曜、平日は前日終値または当日）
+    days_old = (today - max_date).days
+    
+    # 既に昨夜または当日のデータがあれば更新不要（force=Trueで強制更新）
+    if days_old <= 1 and not force and today.dayofweek not in [0, 1]:
+        print(f"[Cache Sync] キャッシュは最新です (最新日: {max_date.strftime('%Y-%m-%d')})")
+        return
+
+    print(f"[Cache Sync] 株価キャッシュの最新同期を開始... (現在キャッシュ最終日: {max_date.strftime('%Y-%m-%d')})")
+    t0 = time.time()
+    start_sync = (max_date - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+
+    delta_dict = {}
+    for i in range(0, len(universe), 25):
+        batch = universe[i:i+25]
+        try:
+            raw = yf.download(batch, start=start_sync, progress=False, group_by="ticker", auto_adjust=True)
+            for sym in batch:
+                try:
+                    if hasattr(raw.columns, "levels"):
+                        if sym not in raw.columns.get_level_values(0):
+                            continue
+                        d = raw[sym][["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+                    elif len(batch) == 1:
+                        d = raw[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+                    else:
+                        continue
+                    if not d.empty:
+                        if d.index.tz is not None:
+                            d.index = d.index.tz_localize(None)
+                        delta_dict[sym] = d
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  Batch {i} delta error: {e}")
+
+    if not delta_dict:
+        print("[Cache Sync] 新規差分データはありませんでした。")
+        return
+
+    new_rows = []
+    updated_cnt = 0
+    for sym, group in existing_df.groupby("Ticker"):
+        group = group.set_index("Date").sort_index()
+        base_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in group.columns]
+        base_ohlcv = group[base_cols].copy()
+
+        if sym in delta_dict:
+            delta_ohlcv = delta_dict[sym]
+            combined_ohlcv = pd.concat([base_ohlcv, delta_ohlcv])
+            combined_ohlcv = combined_ohlcv[~combined_ohlcv.index.duplicated(keep="last")].sort_index()
+            if len(combined_ohlcv) > len(base_ohlcv):
+                updated_cnt += 1
+        else:
+            combined_ohlcv = base_ohlcv
+
+        feat_df = compute_features(combined_ohlcv)
+        if feat_df is not None:
+            tmp = feat_df.reset_index()
+            if "Date" not in tmp.columns and "index" in tmp.columns:
+                tmp.rename(columns={"index": "Date"}, inplace=True)
+            tmp["Ticker"] = sym
+            new_rows.append(tmp)
+
+    if new_rows and updated_cnt > 0:
+        updated_full = pd.concat(new_rows, ignore_index=True)
+        updated_full["Date"] = pd.to_datetime(updated_full["Date"])
+        updated_full["Ticker"] = updated_full["Ticker"].astype(str)
+        updated_full.to_feather(CACHE_FILE)
+        new_max_date = updated_full["Date"].max().strftime("%Y-%m-%d")
+        size_mb = os.path.getsize(CACHE_FILE) / (1024 * 1024)
+        print(f"⚡ [Cache Sync 完了] {updated_cnt} 銘柄を最新化！(最新基準日: {new_max_date}, {size_mb:.2f} MB, 所要時間: {time.time()-t0:.2f}秒)")
+    else:
+        print(f"[Cache Sync] キャッシュは既に最新日付です ({time.time()-t0:.2f}秒)")
+
+_LAST_SYNC_TIME = 0
+
+def load_cache(universe=None, auto_sync=True):
+    """超高速 Feather 読込 (必要に応じて日次自動同期を実行)"""
+    global _LAST_SYNC_TIME
+    if not os.path.exists(CACHE_FILE):
+        return build_cache(universe)
+
+    # 1時間に1回、バックグラウンドまたは初回アクセス時に日次同期をチェック
+    now = time.time()
+    if auto_sync and (now - _LAST_SYNC_TIME > 3600):
+        try:
+            sync_daily_cache(universe)
+            _LAST_SYNC_TIME = now
+        except Exception as e:
+            print(f"[Cache Auto-Sync Warning] 同期エラー（既存キャッシュを使用）: {e}")
+
     t0 = time.time()
     full_df = pd.read_feather(CACHE_FILE)
-    
+
     if universe is not None:
         full_df = full_df[full_df["Ticker"].isin(universe)]
 
@@ -133,4 +242,5 @@ def load_cache(universe=None):
     return data
 
 if __name__ == "__main__":
-    build_cache(force=True)
+    sync_daily_cache(force=True)
+
