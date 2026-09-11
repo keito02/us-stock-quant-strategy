@@ -202,10 +202,13 @@ def sync_daily_cache(universe=None, force=False):
         updated_full = pd.concat(new_rows, ignore_index=True)
         updated_full["Date"] = pd.to_datetime(updated_full["Date"])
         updated_full["Ticker"] = updated_full["Ticker"].astype(str)
-        updated_full.to_feather(CACHE_FILE)
-        new_max_date = updated_full["Date"].max().strftime("%Y-%m-%d")
-        size_mb = os.path.getsize(CACHE_FILE) / (1024 * 1024)
-        print(f"⚡ [Cache Sync 完了] {updated_cnt} 銘柄を最新化！(最新基準日: {new_max_date}, {size_mb:.2f} MB, 所要時間: {time.time()-t0:.2f}秒)")
+        try:
+            updated_full.to_feather(CACHE_FILE)
+            size_mb = os.path.getsize(CACHE_FILE) / (1024 * 1024)
+            new_max_date = updated_full["Date"].max().strftime("%Y-%m-%d")
+            print(f"⚡ [Cache Sync 完了] {updated_cnt} 銘柄を最新化！(最新基準日: {new_max_date}, {size_mb:.2f} MB, 所要時間: {time.time()-t0:.2f}秒)")
+        except Exception as fe:
+            print(f"⚠️ [Cache Sync Warning] Featherファイル保存に失敗しましたが、メモリ上での運用を継続します: {fe}")
     else:
         print(f"[Cache Sync] キャッシュは既に最新日付です ({time.time()-t0:.2f}秒)")
 

@@ -301,11 +301,21 @@ def get_screening_data(is_margin):
     df_c = pd.DataFrame(cands)
     df_p = df_c[df_c["passed"]].sort_values(by="composite", ascending=False).reset_index(drop=True)
     
-    top2 = df_p.head(2).copy()
-    gap = top2.loc[0, "composite"] - top2.loc[1, "composite"]
     gap_threshold = 0.15 if is_margin else 0.20
-    weights = [0.80, 0.20] if gap >= gap_threshold else [0.50, 0.50]
-    top2["weight"] = weights
+    if len(df_p) >= 2:
+        top2 = df_p.head(2).copy()
+        gap = float(top2.loc[0, "composite"] - top2.loc[1, "composite"])
+        weights = [0.80, 0.20] if gap >= gap_threshold else [0.50, 0.50]
+        top2["weight"] = weights
+    elif len(df_p) == 1:
+        top2 = df_p.head(1).copy()
+        gap = 1.0
+        weights = [1.0]
+        top2["weight"] = weights
+    else:
+        top2 = pd.DataFrame(columns=["symbol", "name", "close", "composite", "mom6", "mom3", "mom12", "vol60", "passed", "weight"])
+        gap = 0.0
+        weights = []
 
     info = {
         "date": cur.strftime("%Y-%m-%d"),
@@ -475,100 +485,191 @@ with tab0:
     # ── 3. 今買うべき株・推奨ロット数・エントリー & エグジットポイント ──
     st.subheader(f"🛒 【{'信用口座 (整数株)' if is_margin_mode else '現物口座 (端株Fractional対応)'}】 今買うべき株・推奨ロット数")
 
-    top1 = df_top2.iloc[0]
-    top2 = df_top2.iloc[1]
-    w1, w2 = screen_info["weights"][0], screen_info["weights"][1]
+    is_bear_mode = screen_info.get("is_bear", False) or len(df_top2) == 0
 
-    target_v1 = total_power_usd * w1
-    target_v2 = total_power_usd * w2
+    if is_bear_mode:
+        st.warning("""
+        🛡️ **【マクロ弱気相場 / 資金保全レジーム】現在、個別株への新規エントリーは完全停止（0%）です**
+        * **推奨アクション**: **全額 BIL（超短期米国債 ETF）または米ドルMMF・キャッシュで運用**
+        * **理由**: QQQが長期サポートライン（SMA200）を下回っているか、モメンタム基準を満たす安全な銘柄が存在しません。
+        * **運用方針**: 暴落リスクを完全にゼロ化しつつ、年利4.0〜5.0%前後の国債金利利回りにより着実に元本を複利拡大しながら、次の強気転換シグナルを待ちます。
+        """)
 
-    p1 = float(top1["close"])
-    p2 = float(top2["close"])
+        bil_price = 91.50
+        bil_shares = int(total_power_usd / bil_price) if is_margin_mode else (total_power_usd / bil_price)
+        sh_str = f"{bil_shares} 株" if is_margin_mode else f"{bil_shares:.4f} 株"
+        act_usd = bil_shares * bil_price
 
-    if is_margin_mode:
-        sh1 = int(target_v1 / p1)
-        sh2 = int(target_v2 / p2)
-        sh1_str = f"{sh1} 株"
-        sh2_str = f"{sh2} 株"
-        act_v1 = sh1 * p1
-        act_v2 = sh2 * p2
-    else:
-        # 端株Fractional対応: 小数点4桁までぴったり購入
-        sh1 = target_v1 / p1
-        sh2 = target_v2 / p2
-        sh1_str = f"{sh1:.4f} 株 (端株約定)"
-        sh2_str = f"{sh2:.4f} 株 (端株約定)"
-        act_v1 = target_v1
-        act_v2 = target_v2
+        st.markdown(f"""
+        <div class="order-card-1" style="border-left: 5px solid #f2cc60;">
+            <h3 style="color:#f2cc60; margin-top:0;">🛡️ 【元本保全・金利利回り運用】 BIL (SPDR Bloomberg 1-3 Month T-Bill ETF)</h3>
+            <p style="color:#8b949e; font-size:13px;"><b>米国超短期国債 (1〜3ヶ月) ETF / 年利4.50% 国庫金利利回り複利運用</b></p>
+            <hr style="border-color:#30363d;">
+            <p><b>推奨発注ロット数:</b> <span class="price-tag">{sh_str}</span></p>
+            <p><b>想定約定価格:</b> <span class="price-tag">${bil_price:,.2f}</span> (約 {bil_price*usd_rate:,.0f} 円)</p>
+            <p><b>約定見込額:</b> <b>${act_usd:,.2f}</b> (約 <b>{act_usd*usd_rate:,.0f} 円</b>)</p>
+            <hr style="border-color:#30363d;">
+            <p><b>🛑 損切りエグジット:</b> <span class="stop-tag">設定不要 (国債価格変動極小)</span></p>
+            <p><b>🚀 運用目標:</b> <span class="profit-tag">マクロ強気転換（QQQ > SMA200）まで無リスク金利獲得</span></p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    total_actual = act_v1 + act_v2
-    stop_p1 = p1 * 0.85
-    stop_p2 = p2 * 0.85
-    trail_p1 = p1 * 1.20
-    trail_p2 = p2 * 1.20
+        df_order = pd.DataFrame([
+            {
+                "区分": "🛡️ 保全待機 (100%)",
+                "ティッカー": "BIL",
+                "銘柄名": "SPDR 1-3 Month T-Bill ETF (超短期米国債)",
+                "発注ロット数": sh_str,
+                "エントリー価格": f"${bil_price:,.2f}",
+                "約定見込額 (USD)": f"${act_usd:,.2f}",
+                "約定見込額 (円)": f"約 {act_usd*usd_rate:,.0f} 円",
+                "損切り価格 (-15%)": "設定不要",
+                "利確目安 (+20%)": "強気転換時リバランス"
+            }
+        ])
+        st.dataframe(df_order, use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns(2)
+    elif len(df_top2) == 1:
+        # 候補1銘柄のみの場合 (100%配分)
+        top1 = df_top2.iloc[0]
+        p1 = float(top1["close"])
+        target_v1 = total_power_usd
+        if is_margin_mode:
+            sh1 = int(target_v1 / p1)
+            sh1_str = f"{sh1} 株"
+            act_v1 = sh1 * p1
+        else:
+            sh1 = target_v1 / p1
+            sh1_str = f"{sh1:.4f} 株 (端株約定)"
+            act_v1 = target_v1
+        stop_p1 = p1 * 0.85
+        trail_p1 = p1 * 1.20
 
-    with c1:
         st.markdown(f"""
         <div class="order-card-1">
-            <h3 style="color:#58a6ff; margin-top:0;">👑 【第1位・絶対的主力 {w1*100:.0f}%】 {top1['symbol']}</h3>
+            <h3 style="color:#58a6ff; margin-top:0;">👑 【単独主力 100%】 {top1['symbol']}</h3>
             <p style="color:#8b949e; font-size:13px;"><b>{top1['name']}</b></p>
             <hr style="border-color:#30363d;">
             <p><b>推奨発注ロット数:</b> <span class="price-tag">{sh1_str}</span></p>
             <p><b>エントリー価格 (買値):</b> <span class="price-tag">${p1:,.2f}</span> (約 {p1*usd_rate:,.0f} 円)</p>
             <p><b>約定見込額:</b> <b>${act_v1:,.2f}</b> (約 <b>{act_v1*usd_rate:,.0f} 円</b>)</p>
             <hr style="border-color:#30363d;">
-            <p><b>🛑 損切りエグジット (-15%):</b><br><span class="stop-tag">${stop_p1:,.2f}</span> (約 {stop_p1*usd_rate:,.0f} 円)<br><small style="color:#8b949e;">終値割れ翌朝寄付売却</small></p>
-            <p><b>🚀 利確トレーリング目標:</b><br><span class="profit-tag">+{20}% (${trail_p1:,.1f})</span><br><small style="color:#8b949e;">到達後ATRトレーリング発動</small></p>
-            <hr style="border-color:#30363d;">
-            <p style="font-size:12px; color:#8b949e;">複合スコア: <b>{top1['composite']:.4f}</b> (6ヶ月騰落: {top1['mom6']*100:+.1f}%)</p>
+            <p><b>🛑 損切りエグジット (-15%):</b><br><span class="stop-tag">${stop_p1:,.2f}</span> (約 {stop_p1*usd_rate:,.0f} 円)</p>
+            <p><b>🚀 利確トレーリング目標:</b><br><span class="profit-tag">+{20}% (${trail_p1:,.1f})</span></p>
         </div>
         """, unsafe_allow_html=True)
 
-    with c2:
-        st.markdown(f"""
-        <div class="order-card-2">
-            <h3 style="color:#2ea043; margin-top:0;">🥈 【第2位・アンカー {w2*100:.0f}%】 {top2['symbol']}</h3>
-            <p style="color:#8b949e; font-size:13px;"><b>{top2['name']}</b></p>
-            <hr style="border-color:#30363d;">
-            <p><b>推奨発注ロット数:</b> <span class="price-tag" style="color:#2ea043;">{sh2_str}</span></p>
-            <p><b>エントリー価格 (買値):</b> <span class="price-tag" style="color:#2ea043;">${p2:,.2f}</span> (約 {p2*usd_rate:,.0f} 円)</p>
-            <p><b>約定見込額:</b> <b>${act_v2:,.2f}</b> (約 <b>{act_v2*usd_rate:,.0f} 円</b>)</p>
-            <hr style="border-color:#30363d;">
-            <p><b>🛑 損切りエグジット (-15%):</b><br><span class="stop-tag">${stop_p2:,.2f}</span> (約 {stop_p2*usd_rate:,.0f} 円)<br><small style="color:#8b949e;">終値割れ翌朝寄付売却</small></p>
-            <p><b>🚀 利確トレーリング目標:</b><br><span class="profit-tag">+{20}% (${trail_p2:,.1f})</span><br><small style="color:#8b949e;">到達後ATRトレーリング発動</small></p>
-            <hr style="border-color:#30363d;">
-            <p style="font-size:12px; color:#8b949e;">複合スコア: <b>{top2['composite']:.4f}</b> (6ヶ月騰落: {top2['mom6']*100:+.1f}%)</p>
-        </div>
-        """, unsafe_allow_html=True)
+        df_order = pd.DataFrame([
+            {
+                "区分": "👑 単独主力 (100%)",
+                "ティッカー": top1["symbol"],
+                "銘柄名": top1["name"],
+                "発注ロット数": sh1_str,
+                "エントリー価格": f"${p1:,.2f}",
+                "約定見込額 (USD)": f"${act_v1:,.2f}",
+                "約定見込額 (円)": f"約 {act_v1*usd_rate:,.0f} 円",
+                "損切り価格 (-15%)": f"${stop_p1:,.2f}",
+                "利確目安 (+20%)": f"${trail_p1:,.2f}"
+            }
+        ])
+        st.dataframe(df_order, use_container_width=True, hide_index=True)
 
-    st.markdown("#### 📋 発注指示サマリー（moomoo証券 入力用）")
-    df_order = pd.DataFrame([
-        {
-            "区分": f"👑 主力 ({w1*100:.0f}%)",
-            "ティッカー": top1["symbol"],
-            "銘柄名": top1["name"],
-            "発注ロット数": sh1_str,
-            "エントリー価格": f"${p1:,.2f}",
-            "約定見込額 (USD)": f"${act_v1:,.2f}",
-            "約定見込額 (円)": f"約 {act_v1*usd_rate:,.0f} 円",
-            "損切り価格 (-15%)": f"${stop_p1:,.2f}",
-            "利確目安 (+20%)": f"${trail_p1:,.2f}"
-        },
-        {
-            "区分": f"🥈 アンカー ({w2*100:.0f}%)",
-            "ティッカー": top2["symbol"],
-            "銘柄名": top2["name"],
-            "発注ロット数": sh2_str,
-            "エントリー価格": f"${p2:,.2f}",
-            "約定見込額 (USD)": f"${act_v2:,.2f}",
-            "約定見込額 (円)": f"約 {act_v2*usd_rate:,.0f} 円",
-            "損切り価格 (-15%)": f"${stop_p2:,.2f}",
-            "利確目安 (+20%)": f"${trail_p2:,.2f}"
-        }
-    ])
-    st.dataframe(df_order, use_container_width=True, hide_index=True)
+    else:
+        # 通常時: 上位2銘柄配分
+        top1 = df_top2.iloc[0]
+        top2 = df_top2.iloc[1]
+        w1, w2 = screen_info["weights"][0], screen_info["weights"][1]
+
+        target_v1 = total_power_usd * w1
+        target_v2 = total_power_usd * w2
+
+        p1 = float(top1["close"])
+        p2 = float(top2["close"])
+
+        if is_margin_mode:
+            sh1 = int(target_v1 / p1)
+            sh2 = int(target_v2 / p2)
+            sh1_str = f"{sh1} 株"
+            sh2_str = f"{sh2} 株"
+            act_v1 = sh1 * p1
+            act_v2 = sh2 * p2
+        else:
+            # 端株Fractional対応: 小数点4桁までぴったり購入
+            sh1 = target_v1 / p1
+            sh2 = target_v2 / p2
+            sh1_str = f"{sh1:.4f} 株 (端株約定)"
+            sh2_str = f"{sh2:.4f} 株 (端株約定)"
+            act_v1 = target_v1
+            act_v2 = target_v2
+
+        total_actual = act_v1 + act_v2
+        stop_p1 = p1 * 0.85
+        stop_p2 = p2 * 0.85
+        trail_p1 = p1 * 1.20
+        trail_p2 = p2 * 1.20
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.markdown(f"""
+            <div class="order-card-1">
+                <h3 style="color:#58a6ff; margin-top:0;">👑 【第1位・絶対的主力 {w1*100:.0f}%】 {top1['symbol']}</h3>
+                <p style="color:#8b949e; font-size:13px;"><b>{top1['name']}</b></p>
+                <hr style="border-color:#30363d;">
+                <p><b>推奨発注ロット数:</b> <span class="price-tag">{sh1_str}</span></p>
+                <p><b>エントリー価格 (買値):</b> <span class="price-tag">${p1:,.2f}</span> (約 {p1*usd_rate:,.0f} 円)</p>
+                <p><b>約定見込額:</b> <b>${act_v1:,.2f}</b> (約 <b>{act_v1*usd_rate:,.0f} 円</b>)</p>
+                <hr style="border-color:#30363d;">
+                <p><b>🛑 損切りエグジット (-15%):</b><br><span class="stop-tag">${stop_p1:,.2f}</span> (約 {stop_p1*usd_rate:,.0f} 円)<br><small style="color:#8b949e;">終値割れ翌朝寄付売却</small></p>
+                <p><b>🚀 利確トレーリング目標:</b><br><span class="profit-tag">+{20}% (${trail_p1:,.1f})</span><br><small style="color:#8b949e;">到達後ATRトレーリング発動</small></p>
+                <hr style="border-color:#30363d;">
+                <p style="font-size:12px; color:#8b949e;">複合スコア: <b>{top1['composite']:.4f}</b> (6ヶ月騰落: {top1['mom6']*100:+.1f}%)</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c2:
+            st.markdown(f"""
+            <div class="order-card-2">
+                <h3 style="color:#2ea043; margin-top:0;">🥈 【第2位・アンカー {w2*100:.0f}%】 {top2['symbol']}</h3>
+                <p style="color:#8b949e; font-size:13px;"><b>{top2['name']}</b></p>
+                <hr style="border-color:#30363d;">
+                <p><b>推奨発注ロット数:</b> <span class="price-tag" style="color:#2ea043;">{sh2_str}</span></p>
+                <p><b>エントリー価格 (買値):</b> <span class="price-tag" style="color:#2ea043;">${p2:,.2f}</span> (約 {p2*usd_rate:,.0f} 円)</p>
+                <p><b>約定見込額:</b> <b>${act_v2:,.2f}</b> (約 <b>{act_v2*usd_rate:,.0f} 円</b>)</p>
+                <hr style="border-color:#30363d;">
+                <p><b>🛑 損切りエグジット (-15%):</b><br><span class="stop-tag">${stop_p2:,.2f}</span> (約 {stop_p2*usd_rate:,.0f} 円)<br><small style="color:#8b949e;">終値割れ翌朝寄付売却</small></p>
+                <p><b>🚀 利確トレーリング目標:</b><br><span class="profit-tag">+{20}% (${trail_p2:,.1f})</span><br><small style="color:#8b949e;">到達後ATRトレーリング発動</small></p>
+                <hr style="border-color:#30363d;">
+                <p style="font-size:12px; color:#8b949e;">複合スコア: <b>{top2['composite']:.4f}</b> (6ヶ月騰落: {top2['mom6']*100:+.1f}%)</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("#### 📋 発注指示サマリー（moomoo証券 入力用）")
+        df_order = pd.DataFrame([
+            {
+                "区分": f"👑 主力 ({w1*100:.0f}%)",
+                "ティッカー": top1["symbol"],
+                "銘柄名": top1["name"],
+                "発注ロット数": sh1_str,
+                "エントリー価格": f"${p1:,.2f}",
+                "約定見込額 (USD)": f"${act_v1:,.2f}",
+                "約定見込額 (円)": f"約 {act_v1*usd_rate:,.0f} 円",
+                "損切り価格 (-15%)": f"${stop_p1:,.2f}",
+                "利確目安 (+20%)": f"${trail_p1:,.2f}"
+            },
+            {
+                "区分": f"🥈 アンカー ({w2*100:.0f}%)",
+                "ティッカー": top2["symbol"],
+                "銘柄名": top2["name"],
+                "発注ロット数": sh2_str,
+                "エントリー価格": f"${p2:,.2f}",
+                "約定見込額 (USD)": f"${act_v2:,.2f}",
+                "約定見込額 (円)": f"約 {act_v2*usd_rate:,.0f} 円",
+                "損切り価格 (-15%)": f"${stop_p2:,.2f}",
+                "利確目安 (+20%)": f"${trail_p2:,.2f}"
+            }
+        ])
+        st.dataframe(df_order, use_container_width=True, hide_index=True)
 
     st.markdown(f"""
     > **⚠️ マクロ暴落エグジットルール（絶対ゲートキーパー）:**  
@@ -579,20 +680,34 @@ with tab0:
 
     # ── 4. 現在の購入候補ランキング Top 15 ──
     st.subheader(f"📊 購入候補ランキング Top 15 ({'信用取引・個別株限定ユニバース' if is_margin_mode else '現物取引・全82銘柄ユニバース'})")
-    st.markdown(f"""
-    モメンタム数式（12-1M 20% + 6-1M 50% + 3-1M 30%）による最新スクリーニングです。
-    第1位（{top1['symbol']}）と第2位（{top2['symbol']}）のモメンタム・ギャップは **`{screen_info['gap']:.4f}`**（判定閾値: {screen_info['gap_threshold']:.2f}）のため、**{'80/20集中配分' if screen_info['gap'] >= screen_info['gap_threshold'] else '50/50均等配分'}**が発動しています。
-    """)
+    if not is_bear_mode and len(df_top2) >= 2:
+        top1_sym = df_top2.iloc[0]["symbol"]
+        top2_sym = df_top2.iloc[1]["symbol"]
+        st.markdown(f"""
+        モメンタム数式（12-1M 20% + 6-1M 50% + 3-1M 30%）による最新スクリーニングです。
+        第1位（{top1_sym}）と第2位（{top2_sym}）のモメンタム・ギャップは **`{screen_info['gap']:.4f}`**（判定閾値: {screen_info['gap_threshold']:.2f}）のため、**{'80/20集中配分' if screen_info['gap'] >= screen_info['gap_threshold'] else '50/50均等配分'}**が発動しています。
+        """)
+    elif is_bear_mode:
+        st.markdown("現在マクロ退避レジーム中のため、新規の個別株買い付けは行いません。以下は参考モメンタム順位です。")
+    else:
+        st.markdown("モメンタム数式（12-1M 20% + 6-1M 50% + 3-1M 30%）による最新スクリーニングです。")
 
-    display_rank = df_ranking.head(15).copy()
-    display_rank["順位"] = [f"{i+1} 位" for i in range(len(display_rank))]
-    display_rank["判定ステータス"] = [
-        "👑 採用 (80% 集中)" if i == 0 else (
-        "🥈 採用 (20% アンカー)" if i == 1 else (
-        "候補 (次点)" if i < 4 else "監視中"
-    )) for i in range(len(display_rank))]
-
-    display_rank["現在株価"] = display_rank["close"].apply(lambda x: f"${x:,.2f}")
+    if not df_ranking.empty:
+        display_rank = df_ranking.head(15).copy()
+        display_rank["順位"] = [f"{i+1} 位" for i in range(len(display_rank))]
+        display_rank["判定ステータス"] = [
+            ("👑 採用 (80% 集中)" if i == 0 and screen_info.get("gap", 0) >= screen_info.get("gap_threshold", 0.15) else (
+             "👑 採用 (50% 均等)" if i == 0 else (
+             "🥈 採用 (20% アンカー)" if i == 1 and screen_info.get("gap", 0) >= screen_info.get("gap_threshold", 0.15) else (
+             "🥈 採用 (50% 均等)" if i == 1 else (
+             "候補 (次点)" if i < 4 else "監視中"
+            ))))) if not is_bear_mode else "待機 (BIL保全)"
+            for i in range(len(display_rank))
+        ]
+        display_rank["現在株価"] = display_rank["close"].apply(lambda x: f"${x:,.2f}")
+    else:
+        display_rank = pd.DataFrame()
+        st.info("現在スクリーニング基準をクリアした候補銘柄はありません。")
     display_rank["複合スコア"] = display_rank["composite"].apply(lambda x: f"{x:.4f}")
     display_rank["6ヶ月騰落"] = display_rank["mom6"].apply(lambda x: f"{x*100:+.1f}%")
     display_rank["3ヶ月騰落"] = display_rank["mom3"].apply(lambda x: f"{x*100:+.1f}%")
