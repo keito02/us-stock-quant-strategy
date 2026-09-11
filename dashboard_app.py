@@ -420,13 +420,31 @@ with tab0:
     """, unsafe_allow_html=True)
 
     # ── 1. 相場環境ステータスバー ──
-    regime_text = f"🟢 BULL (強気相場継続 / レバレッジ {screen_info['rec_lev']:.1f}x 適用)" if not screen_info["is_bear"] else "🔴 BEAR (100% 現金/BIL 完全退避)"
-    
+    qc = screen_info["qqq_close"]
+    q50 = screen_info["qqq_sma50"]
+    q200 = screen_info["qqq_sma200"]
+
+    if screen_info["is_bear"]:
+        regime_status = "🔴 BEAR (マクロ下落警戒 / 全額BIL退避)"
+        regime_sub = f"QQQ: ${qc:.2f} < 長期SMA200"
+        lev_sub = "リスク回避のため完全退避 (0倍)"
+    elif qc < q50:
+        regime_status = "🟡 BULL 調整中 (短期押し目)"
+        regime_sub = f"QQQ: ${qc:.2f} (50日線 ${q50:.2f} 割れ)"
+        lev_sub = "防衛ルール発動中 (手動で2.0倍選択可)"
+    else:
+        regime_status = "🟢 BULL 強気上昇中 (ブレイクアウト)"
+        regime_sub = f"QQQ: ${qc:.2f} (50日線・200日線上抜け)"
+        lev_sub = f"超低ボラ安定強気 (信用上限 2.0x)"
+
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-    m_col1.metric("🌐 相場レジーム判定", regime_text, f"QQQ: ${screen_info['qqq_close']:.2f}")
+    m_col1.metric("🌐 相場レジーム判定", regime_status, regime_sub)
     m_col2.metric("📊 QQQ 20日ボラティリティ", f"{screen_info['qqq_vol']*100:.2f}%", "16%未満=超低ボラ安定強気")
-    m_col3.metric("🎯 適用レバレッジ", f"{screen_info['rec_lev']:.1f} 倍", f"{'信用上限 2.0x' if is_margin_mode else '現物 1.0x (金利0)'}")
+    m_col3.metric("🎯 判定レバレッジ", f"{screen_info['rec_lev']:.1f} 倍 (推奨)", lev_sub)
     m_col4.metric("📅 次回定期リバランス日", "2026年9月30日 (水) 引け後", "月次月末リバランス")
+
+    if qc < q50 and not screen_info["is_bear"] and is_margin_mode:
+        st.caption(f"💡 **レバレッジ解説**: 現在、長期トレンド（200日線: ${q200:.2f}）は上向きですが、QQQ終値（${qc:.2f}）が50日移動平均線（${q50:.2f}）をわずかに下回っているため、**無用なドローダウンと買方金利（年4.5%）負担を防ぐ安全ルールにより【中立1.0倍】を推奨**しています。50日線を回復すると自動で2.0倍推奨へ復帰します。なお、下のセレクトボックスから**手動で【2.0倍】に変更して発注株数を計算することも可能**です。")
 
     st.markdown("---")
 
