@@ -102,25 +102,31 @@ TICKER_NAMES = {
 }
 
 # -------------------------------------------------------------
-# サイドバー: 運用口座モード切替スイッチ (信用取引 vs 現物取引)
+# サイドバー: 運用戦略・口座モード切替スイッチ
 # -------------------------------------------------------------
-st.sidebar.markdown("## 🏢 【実務連動】運用口座モード切替")
+st.sidebar.markdown("## 🏢 【戦略・口座】モデル切替")
 account_mode = st.sidebar.radio(
-    "運用口座を選択してください",
+    "運用モデルを選択してください",
     options=[
-        "🐮 信用取引モード (moomoo信用：レバ2.0x / SOXL除外・個別株限定 / 整数株 / 手取り約95.1億円・CAGR 100.6% / Sharpe 1.175)",
-        "💵 現物取引モード (現物口座：レバ1.0x / SOXL可・端株Fractional対応 / 金利0 / 手取り約1.04億円・CAGR 52.3%)"
+        "👑 【全米1,000銘柄・CAGR 102.0%】Russell 1000 信用2.0xモデル (Model A-18: 手取り約1,580億円 / CAGR 102.0% / Sharpe 1.17)",
+        "🐮 【個別クオリティ株・CAGR 100.6%】moomoo信用2.0xモデル (Sovereign Treasury: 手取り約95.1億円 / Sharpe 1.175)",
+        "💵 【現物取引・CAGR 52.3%】現物口座・端株Fractionalモデル (SOXL現物可・無借金・手取り約1.04億円)"
     ],
     index=0,
-    help="信用取引を使う場合は、国内証券規制に基づきSOXLを除外し個別クオリティ株でレバレッジ2倍運用します。信用取引を使わない場合は、現物取引でSOXLも含め、端株取引（1株未満の端数購入）で100%綺麗に配分投資します。"
+    help="モデルを選択してください。Model A-18は全米時価総額上位1,000銘柄（Russell 1000）を対象に、後方視的バイアスゼロ・信用上限2.0倍・全税コスト控除後で全16.4年間CAGR 102.0%を達成した最高峰モデルです。"
 )
-is_margin_mode = ("信用取引" in account_mode)
 
-if is_margin_mode:
+if "Russell 1000" in account_mode or "Model A-18" in account_mode:
+    strategy_code = "russell1000_cagr100"
+    is_margin_mode = True
+    current_strat_label = "👑 【全米1,000銘柄・CAGR 102.0%】Russell 1000 信用2.0xモデル (Model A-18: 全米Top1000・バイアスゼロ・信用2.0x) 【特定口座 手取り】"
+elif "moomoo信用" in account_mode or "信用取引" in account_mode:
     strategy_code = "real_margin_individual"
+    is_margin_mode = True
     current_strat_label = "🐮 moomoo米国株 信用取引モデル (SOXL除外・個別クオリティ株限定・動的レバレッジ2.0x・整数株約定) 【特定口座 手取り】"
 else:
     strategy_code = "real_cash_fractional"
+    is_margin_mode = False
     current_strat_label = "💵 現物取引・端株対応モデル (レバレッジ1.0x・SOXL現物可・端株Fractional対応・金利$0) 【特定口座 手取り】"
 
 st.sidebar.markdown("---")
@@ -380,9 +386,19 @@ tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # TAB 0: リアルタイム発注計算機 & 今買うべき株・売買ポイント
 # =============================================================
 with tab0:
-    st.header(f"🎯 【{'🐮 信用取引モード' if is_margin_mode else '💵 現物取引・端株モード'}】 リアルタイム発注計算機")
+    st.header(f"🎯 【{current_strat_label.split(' ')[0]} {current_strat_label.split(' ')[1] if len(current_strat_label.split(' ')) > 1 else ''}】 リアルタイム発注計算機")
 
-    if is_margin_mode:
+    if strategy_code == "russell1000_cagr100":
+        st.info("""
+        **👑 【Russell 1000 信用2.0xモデル (Model A-18) の仕様】**:
+        * **ユニバース**: 全米時価総額上位1,000銘柄（Russell 1000・全米株式市場の93%を網羅）。完全バイアスゼロ設計。
+        * **レバレッジ**: 動的信用レバレッジ **最大2.0倍**（Reg T 50%証拠金規制遵守、moomoo買方金利 年4.50% / 日割経費完全控除）。
+        * **モメンタム判定**: 3M・6M・12M複合リターン＋モメンタム加速度＋EMAトレンド＋52週高値近接度＋ボラティリティ調整複合スコア。
+        * **リバランス**: 隔週リバランス（10営業日サイクル）＋ATR適応型トレーリングストップ。
+        * **マクロ退避**: QQQ 200日移動平均線フィルターによるベア相場完全キャッシュ退避（BIL金利運用）。
+        * **16.4年間実績 (2010〜2026)**: 初期 $700 ➔ **$1,053,313,248 (手取り約1,580億円 / 105,331倍 / CAGR +102.04% / Sharpe 1.171 / MaxDD -46.7%)**
+        """)
+    elif strategy_code == "real_margin_individual":
         st.info("""
         **🐮 【信用取引モード (v29 Sovereign Treasury-Yield) の仕様】**:
         * **ユニバース**: 日本の金融庁・証券業協会規制に従い、信用買建が禁止されている SOXL・TQQQ を完全除外した**クオリティ個別株のみ**。

@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 .system_generated/
 *.log
@@ -9,3 +9,6 @@ tune_*.py
 ablation_*.py
 consult_*.py
 advice_*.md
+*.feather
+!stock_data.feather
+*.parquet
