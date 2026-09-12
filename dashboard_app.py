@@ -248,7 +248,25 @@ def get_live_usdjpy_rate():
 # -------------------------------------------------------------
 @st.cache_data(ttl=300)
 def get_screening_data(is_margin):
-    data = load_cache()
+    CAND_COLS = ["symbol", "name", "close", "composite", "mom6", "mom3", "mom12", "vol60", "passed"]
+    data = load_cache(auto_sync=False)
+    
+    if not data or "QQQ" not in data or data["QQQ"].empty:
+        cur_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+        info = {
+            "date": cur_str,
+            "qqq_close": 500.0,
+            "qqq_sma50": 490.0,
+            "qqq_sma200": 460.0,
+            "qqq_vol": 0.15,
+            "is_bear": False,
+            "rec_lev": 2.0 if is_margin else 1.0,
+            "gap": 0.0,
+            "gap_threshold": 0.15 if is_margin else 0.20,
+            "weights": [0.50, 0.50]
+        }
+        return info, pd.DataFrame(columns=CAND_COLS), pd.DataFrame(columns=CAND_COLS + ["weight"])
+
     qqq = data.get("QQQ")
     cur = qqq.index[-1]
     qc = float(qqq.loc[cur, "Close"])
@@ -276,8 +294,8 @@ def get_screening_data(is_margin):
     cands = []
     for sym in pool:
         df_s = data.get(sym)
-        if df_s is None or cur not in df_s.index: continue
-        row = df_s.loc[cur]
+        if df_s is None or df_s.empty: continue
+        row = df_s.loc[cur] if cur in df_s.index else df_s.iloc[-1]
         comp = row.get("Composite", np.nan)
         mom6 = row.get("Mom_6_1", np.nan)
         mom3 = row.get("Mom_3_1", np.nan)
@@ -285,9 +303,9 @@ def get_screening_data(is_margin):
         sma200 = row.get("SMA200", np.nan)
         vol60 = row.get("Vol_60", np.nan)
         vol20 = row.get("Vol20", np.nan)
-        close = float(row["Close"])
+        close = float(row["Close"]) if not pd.isna(row.get("Close", np.nan)) else 0.0
         
-        if any(pd.isna(x) for x in [comp, mom6, sma200, vol60]): continue
+        if any(pd.isna(x) for x in [comp, mom6, sma200, vol60]) or close <= 0: continue
         dv = float(vol20) * close if not pd.isna(vol20) else 0
         passed = (float(comp) > 0 and float(mom6) > 0 and close > float(sma200) and
                   close >= 5 and float(vol60) >= 0.15 and dv >= 1e6)
@@ -304,8 +322,11 @@ def get_screening_data(is_margin):
             "passed": passed
         })
 
-    df_c = pd.DataFrame(cands)
-    df_p = df_c[df_c["passed"]].sort_values(by="composite", ascending=False).reset_index(drop=True)
+    df_c = pd.DataFrame(cands, columns=CAND_COLS) if cands else pd.DataFrame(columns=CAND_COLS)
+    if not df_c.empty and "passed" in df_c.columns and df_c["passed"].any():
+        df_p = df_c[df_c["passed"]].sort_values(by="composite", ascending=False).reset_index(drop=True)
+    else:
+        df_p = pd.DataFrame(columns=CAND_COLS)
     
     gap_threshold = 0.15 if is_margin else 0.20
     if len(df_p) >= 2:
@@ -319,12 +340,12 @@ def get_screening_data(is_margin):
         weights = [1.0]
         top2["weight"] = weights
     else:
-        top2 = pd.DataFrame(columns=["symbol", "name", "close", "composite", "mom6", "mom3", "mom12", "vol60", "passed", "weight"])
+        top2 = pd.DataFrame(columns=CAND_COLS + ["weight"])
         gap = 0.0
         weights = []
 
     info = {
-        "date": cur.strftime("%Y-%m-%d"),
+        "date": cur.strftime("%Y-%m-%d") if hasattr(cur, "strftime") else str(cur),
         "qqq_close": qc,
         "qqq_sma50": q50,
         "qqq_sma200": q200,
@@ -739,17 +760,16 @@ with tab0:
             for i in range(len(display_rank))
         ]
         display_rank["現在株価"] = display_rank["close"].apply(lambda x: f"${x:,.2f}")
-    else:
-        display_rank = pd.DataFrame()
-        st.info("現在スクリーニング基準をクリアした候補銘柄はありません。")
-    display_rank["複合スコア"] = display_rank["composite"].apply(lambda x: f"{x:.4f}")
-    display_rank["6ヶ月騰落"] = display_rank["mom6"].apply(lambda x: f"{x*100:+.1f}%")
-    display_rank["3ヶ月騰落"] = display_rank["mom3"].apply(lambda x: f"{x*100:+.1f}%")
-    display_rank["1年騰落"] = display_rank["mom12"].apply(lambda x: f"{x*100:+.1f}%")
-    display_rank["20日ボラ"] = display_rank["vol60"].apply(lambda x: f"{x*100:.1f}%")
+        display_rank["複合スコア"] = display_rank["composite"].apply(lambda x: f"{x:.4f}")
+        display_rank["6ヶ月騰落"] = display_rank["mom6"].apply(lambda x: f"{x*100:+.1f}%")
+        display_rank["3ヶ月騰落"] = display_rank["mom3"].apply(lambda x: f"{x*100:+.1f}%")
+        display_rank["1年騰落"] = display_rank["mom12"].apply(lambda x: f"{x*100:+.1f}%")
+        display_rank["20日ボラ"] = display_rank["vol60"].apply(lambda x: f"{x*100:.1f}%")
 
-    cols_order = ["順位", "symbol", "name", "現在株価", "複合スコア", "6ヶ月騰落", "3ヶ月騰落", "1年騰落", "20日ボラ", "判定ステータス"]
-    st.dataframe(display_rank[cols_order], use_container_width=True, hide_index=True)
+        cols_order = ["順位", "symbol", "name", "現在株価", "複合スコア", "6ヶ月騰落", "3ヶ月騰落", "1年騰落", "20日ボラ", "判定ステータス"]
+        st.dataframe(display_rank[cols_order], use_container_width=True, hide_index=True)
+    else:
+        st.info("現在スクリーニング基準をクリアした候補銘柄はありません。マクロ弱気退避ルール（BIL）または監視リスト待機中です。")
 
 
 # =============================================================

@@ -214,13 +214,13 @@ def sync_daily_cache(universe=None, force=False):
 
 _LAST_SYNC_TIME = 0
 
-def load_cache(universe=None, auto_sync=True):
-    """超高速 Feather 読込 (必要に応じて日次自動同期を実行)"""
+def load_cache(universe=None, auto_sync=False):
+    """超高速 Feather 読込 (Streamlit Cloud 向けに安全な read-only 対応)"""
     global _LAST_SYNC_TIME
     if not os.path.exists(CACHE_FILE):
         return build_cache(universe)
 
-    # 1時間に1回、バックグラウンドまたは初回アクセス時に日次同期をチェック
+    # バックグラウンドでの日次同期（auto_sync=True の場合のみ実行）
     now = time.time()
     if auto_sync and (now - _LAST_SYNC_TIME > 3600):
         try:
@@ -230,7 +230,11 @@ def load_cache(universe=None, auto_sync=True):
             print(f"[Cache Auto-Sync Warning] 同期エラー（既存キャッシュを使用）: {e}")
 
     t0 = time.time()
-    full_df = pd.read_feather(CACHE_FILE)
+    try:
+        full_df = pd.read_feather(CACHE_FILE)
+    except Exception as e:
+        print(f"[Cache Read Error]: {e}")
+        return build_cache(universe, force=True)
 
     if universe is not None:
         full_df = full_df[full_df["Ticker"].isin(universe)]
